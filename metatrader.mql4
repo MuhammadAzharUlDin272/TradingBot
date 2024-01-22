@@ -1,0 +1,140 @@
+// Define global variables for configuration
+input double LotSize = 0.1;
+input double StopLossPercent = 2.0;
+input double TakeProfitPercent = 5.0;
+input int FastMA_Period = 10;
+input int SlowMA_Period = 30;
+input int LookbackPeriod = 100;  // Number of bars to look back
+
+// Define indicator handles
+int FastMA, SlowMA;
+
+// Prediction variables
+double prediction = 0; // 0: No Signal, 1: Buy Signal, -1: Sell Signal
+bool tradeInProgress = false;
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+  {
+   // Initialize indicators
+   FastMA = iMA(Symbol(), 0, FastMA_Period, 0, MODE_SMA, PRICE_CLOSE);
+   SlowMA = iMA(Symbol(), 0, SlowMA_Period, 0, MODE_SMA, PRICE_CLOSE);
+
+   return(INIT_SUCCEEDED);
+  }
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+  {
+   // Deinitialize indicators
+   IndicatorRelease(FastMA);
+   IndicatorRelease(SlowMA);
+  }
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+  {
+   // If a trade is in progress, check for stop loss or take profit
+   if (tradeInProgress)
+     {
+      CheckTradeStatus();
+     }
+   else
+     {
+      // Calculate account free margin
+      double freeMargin = AccountFreeMarginCheck(Symbol(), OP_BUY, LotSize);
+
+      // Calculate stop loss and take profit levels
+      double stopLoss = MarketInfo(Symbol(), MODE_STOPLEVEL) * Point - StopLossPercent * MarketInfo(Symbol(), MODE_POINT);
+      double takeProfit = MarketInfo(Symbol(), MODE_STOPLEVEL) * Point + TakeProfitPercent * MarketInfo(Symbol(), MODE_POINT);
+
+      // Fetch historical data
+      double historicalClose[];
+      ArraySetAsSeries(historicalClose, true);
+      int bars = MathMin(LookbackPeriod, iBars(Symbol(), 0));
+
+      for (int i = 0; i < bars; i++)
+        {
+         historicalClose[i] = iClose(Symbol(), 0, i);
+        }
+
+      // Calculate fast and slow moving averages on historical data
+      double historicalFastMA = iMAOnArray(historicalClose, 0, FastMA_Period, 0, MODE_SMA, 0);
+      double historicalSlowMA = iMAOnArray(historicalClose, 0, SlowMA_Period, 0, MODE_SMA, 0);
+
+      // Check for buy signal (fast MA crossing above slow MA)
+      if (historicalFastMA > historicalSlowMA)
+        {
+         prediction = 1; // Buy Signal
+         tradeInProgress = true; // Set trade in progress
+         OpenBuyOrder(LotSize, takeProfit, stopLoss);
+        }
+      // Check for sell signal (fast MA crossing below slow MA)
+      else if (historicalFastMA < historicalSlowMA)
+        {
+         prediction = -1; // Sell Signal
+         tradeInProgress = true; // Set trade in progress
+         OpenSellOrder(LotSize, takeProfit, stopLoss);
+        }
+     }
+  }
+
+// Function to open a buy order
+void OpenBuyOrder(double lotSize, double takeProfit, double stopLoss)
+  {
+   // Check if there is enough free margin
+   double freeMargin = AccountFreeMarginCheck(Symbol(), OP_BUY, lotSize);
+
+   if (freeMargin >= lotSize * MarketInfo(Symbol(), MODE_MARGINREQUIRED))
+     {
+      // Place a buy order
+      int ticket = OrderSend(Symbol(), OP_BUY, lotSize, MarketInfo(Symbol(), MODE_ASK), 3, 0, 0, "", 0, clrNONE);
+
+      // Set stop loss and take profit for the buy order
+      if (ticket > 0)
+        {
+         OrderSend(Symbol(), OP_SELL, lotSize, MarketInfo(Symbol(), MODE_BID), 2, stopLoss, takeProfit, "", 0, clrNONE);
+        }
+     }
+  }
+
+// Function to open a sell order
+void OpenSellOrder(double lotSize, double takeProfit, double stopLoss)
+  {
+   // Check if there is enough free margin
+   double freeMargin = AccountFreeMarginCheck(Symbol(), OP_SELL, lotSize);
+
+   if (freeMargin >= lotSize * MarketInfo(Symbol(), MODE_MARGINREQUIRED))
+     {
+      // Place a sell order
+      int ticket = OrderSend(Symbol(), OP_SELL, lotSize, MarketInfo(Symbol(), MODE_BID), 3, 0, 0, "", 0, clrNONE);
+
+      // Set stop loss and take profit for the sell order
+      if (ticket > 0)
+        {
+         OrderSend(Symbol(), OP_BUY, lotSize, MarketInfo(Symbol(), MODE_ASK), 2, stopLoss, takeProfit, "", 0, clrNONE);
+        }
+     }
+  }
+
+// Function to check trade status (stop loss or take profit)
+void CheckTradeStatus()
+  {
+   for (int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      if (OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+        {
+         if (OrderType() == OP_BUY || OrderType() == OP_SELL)
+           {
+            if (OrderClose(OrderTicket(), OrderLots(), OrderClosePrice(), 3, clrNONE))
+              {
+               tradeInProgress = false; // Reset trade in progress
+              }
+           }
+        }
+     }
+  }
